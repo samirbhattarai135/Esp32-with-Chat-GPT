@@ -3,6 +3,10 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <BluetoothA2DPSink.h>
+#include <vector>
+#include <FS.h>
+#include <SPIFFS.h>
+
 
 // Replace with your network credentials
 const char* ssid = "we";
@@ -17,6 +21,7 @@ const char* apiKey = "Api Key";
 BluetoothA2DPSink a2dp_sink;
 WiFiClientSecure client;
 HTTPClient http;
+
 
 const char* root_ca = \
 "-----BEGIN CERTIFICATE-----\n" \
@@ -34,14 +39,13 @@ const char* root_ca = \
 "-----END CERTIFICATE-----\n" \
 "";
 
-
 std::vector<uint8_t> audioData;
 String audioUrl;
 
+void audio_data_callback(const uint8_t *data, uint32_t length);
+void saveAudioToFile(const String &filename);
 bool getTTS(String text);
 void streamAudio();
-void audio_data_callback(const uint8_t *data, uint32_t length);
-
 
 bool getTTS(String text) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -65,11 +69,11 @@ bool getTTS(String text) {
 
                 WiFiClient *stream = http.getStreamPtr();
                 unsigned long startTime = millis();
-                const unsigned long timeout = 180000; // 60 seconds timeout
+                const unsigned long timeout = 180000; // 3 minutes timeout
 
-                const int bufferSize = 4096; // Adjust buffer size as needed
+                const int bufferSize = 8192; // Increased buffer size
                 std::vector<uint8_t> buffer(bufferSize);
-                
+
                 while (stream->connected() || stream->available()) {
                     int available = stream->available();
                     if (available > 0) {
@@ -119,6 +123,34 @@ bool getTTS(String text) {
     return false;
 }
 
+void saveAudioToFile(const String &filename) {
+    if (SPIFFS.exists(filename)) {
+        SPIFFS.remove(filename);
+    }
+
+    File file = SPIFFS.open(filename, FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to create file");
+        return;
+    }
+
+    file.write(audioData.data(), audioData.size());
+    file.close();
+
+    Serial.print("Audio saved to: ");
+    Serial.println(filename);
+
+    // Debugging: Check the file size after saving
+    file = SPIFFS.open(filename, FILE_READ);
+    if (file) {
+        Serial.print("Saved file size: ");
+        Serial.println(file.size());
+        file.close();
+    } else {
+        Serial.println("Failed to open the saved file for checking size.");
+    }
+}
+
 void audio_data_callback(const uint8_t *data, uint32_t length) {
     if (!audioData.empty()) {
         uint32_t bytesToWrite = min(length, (uint32_t)audioData.size());
@@ -130,7 +162,7 @@ void audio_data_callback(const uint8_t *data, uint32_t length) {
 void streamAudio() {
     if (!audioData.empty()) {
         a2dp_sink.set_stream_reader(audio_data_callback);
-        a2dp_sink.start("XBS05");
+        a2dp_sink.start(bluetoothDeviceName);
         Serial.println("Streaming audio to Bluetooth speaker...");
     } else {
         Serial.println("No audio data available to stream.");
@@ -141,31 +173,39 @@ void setup() {
     Serial.begin(115200);
     delay(1000); // Wait for the serial monitor to open
 
+    String prompt = "Hello";
+
+    if (!SPIFFS.begin(true)) {
+        Serial.println("Failed to mount file system");
+        return;
+    }
+
     // Connect to WiFi
-    Serial.print("Connecting to WiFi....");
+    Serial.println("Connecting to WiFi...");
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
-        Serial.print(".");
+        Serial.println("Connecting...");
     }
     Serial.println("Connected to WiFi");
-     // Test HTTPS connection
-  client.setCACert(root_ca);
-  Serial.println("Testing HTTPS connection...");
-  if (!client.connect("api.openai.com", 443)) {
-    Serial.println("Connection to API failed!");
-  } else {
-    Serial.println("Connected to api.openai.com!");
-    
-  }
 
-    // Test the TTS function
-    String prompt = "Hello";
+
+    // Test HTTPS connection
+    client.setCACert(root_ca);
+    Serial.println("Testing HTTPS connection...");
+    if (!client.connect("api.openai.com", 443)) {
+        Serial.println("Connection to API failed!");
+    } else {
+        Serial.println("Connected to api.openai.com!");
+    }
+
     if (getTTS(prompt)) {
-        streamAudio();
+        saveAudioToFile("/response.mp3");  // Save the audio to a file
+        streamAudio();  // Stream the audio via Bluetooth
     } else {
         Serial.println("Failed to get TTS");
     }
+
 }
 
 void loop() {
