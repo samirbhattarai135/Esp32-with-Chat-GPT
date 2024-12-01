@@ -93,6 +93,7 @@ void loop() {
       display.print("Assistant: :))");
       display.display();
       streamAudio(audioUrl);
+      delay(5000); 
     }
   }
 }
